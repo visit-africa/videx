@@ -11,7 +11,7 @@ const STEPS = [
   { icon:"✍", label:"Script", sub:"& Lyrics", desc:"Write your script, lyrics & scene prompts" },
   { icon:"🎵", label:"Music",  sub:"Suno AI",  desc:"Generate a full song with real vocals" },
   { icon:"🎙", label:"Voice",  sub:"ElevenLabs", desc:"Synthesize a cinematic voiceover" },
-  { icon:"🎬", label:"Video",  sub:"Runway / Luma", desc:"Render your video scenes with AI" },
+  { icon:"🎬", label:"Video",  sub:"Luma AI", desc:"Render your video scenes with AI" },
 ];
 
 const VOICES = [
@@ -127,7 +127,7 @@ function AutoModePanel({ apiKeys }) {
   const [lang, setLang] = useState("English");
   const [dur, setDur] = useState("3-5 min");
   const [voiceId, setVoiceId] = useState("21m00Tcm4TlvDq8ikWAM");
-  const [videoEngine, setVideoEngine] = useState("runway");
+  const [videoEngine, setVideoEngine] = useState("luma");
   const [running, setRunning] = useState(false);
   const [stages, setStages] = useState({
     script: "idle", music: "idle", voice: "idle", video: "idle"
@@ -160,7 +160,12 @@ function AutoModePanel({ apiKeys }) {
     let scriptText = "";
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST", headers:{"Content-Type":"application/json"},
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json",
+          "anthropic-version":"2023-06-01",
+          "anthropic-dangerous-direct-browser-access":"true",
+        },
         body: JSON.stringify({
           model:"claude-sonnet-4-20250514", max_tokens:1000,
           messages:[{ role:"user", content:
@@ -169,13 +174,15 @@ function AutoModePanel({ apiKeys }) {
         }),
       });
       const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
       scriptText = data.content?.find(b => b.type==="text")?.text || "";
+      if (!scriptText) throw new Error("Empty response");
       setResults(p => ({ ...p, script: scriptText }));
       setStage("script", "done");
       log("✅ Script, lyrics & scene prompts ready.", C.success);
-    } catch {
+    } catch(e) {
       setStage("script", "error");
-      log("❌ Script generation failed. Stopping.", C.error);
+      log(`❌ Script failed: ${e.message}`, C.error);
       setRunning(false); return;
     }
 
@@ -242,54 +249,33 @@ function AutoModePanel({ apiKeys }) {
     }
 
     // ── STEP 4: Video ───────────────────────────────────────────
-    const hasVideoKey = videoEngine==="runway" ? !!apiKeys.runway : !!apiKeys.luma;
+    const hasVideoKey = !!apiKeys.luma;
     if (!hasVideoKey) {
       setStage("video", "skipped");
-      log("⏭  Video skipped — no video API key.", C.muted);
+      log("⏭  Video skipped — no Luma AI API key.", C.muted);
     } else {
-      log(`🎬 Sending first scene to ${videoEngine==="runway"?"Runway ML":"Luma AI"}...`, C.neon2);
+      log(`🎬 Sending first scene to Luma AI...`, C.neon2);
       setStage("video", "loading");
       const sceneMatch = scriptText.match(/scene prompt[s]?[:\s\n]+([\s\S]{0,500})/i);
       const scenePrompt = sceneMatch ? sceneMatch[1].trim() : scriptText.substring(0, 400);
       try {
         let videoUrl = "";
-        if (videoEngine==="runway") {
-          const res = await fetch("https://api.dev.runwayml.com/v1/image_to_video", {
-            method:"POST",
-            headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKeys.runway}`,"X-Runway-Version":"2024-11-06"},
-            body: JSON.stringify({ promptText:scenePrompt, model:"gen4_turbo", ratio:"1280:720", duration:5 }),
-          });
-          const d = await res.json();
-          if (d?.id) {
-            log("⏳ Runway rendering video... (2-5 min)", C.neon2);
-            for (let i=0;i<40;i++) {
-              await sleep(5000);
-              const pr = await fetch(`https://api.dev.runwayml.com/v1/tasks/${d.id}`,{
-                headers:{"Authorization":`Bearer ${apiKeys.runway}`,"X-Runway-Version":"2024-11-06"}
-              });
-              const pd = await pr.json();
-              if (pd?.status==="SUCCEEDED"&&pd?.output?.[0]) { videoUrl=pd.output[0]; break; }
-              if (pd?.status==="FAILED") break;
-            }
-          }
-        } else {
-          const res = await fetch("https://api.lumalabs.ai/dream-machine/v1/generations", {
-            method:"POST",
-            headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKeys.luma}`},
-            body: JSON.stringify({ prompt:scenePrompt, aspect_ratio:"16:9", loop:false }),
-          });
-          const d = await res.json();
-          if (d?.id) {
-            log("⏳ Luma rendering video... (2-5 min)", C.neon2);
-            for (let i=0;i<40;i++) {
-              await sleep(5000);
-              const pr = await fetch(`https://api.lumalabs.ai/dream-machine/v1/generations/${d.id}`,{
-                headers:{"Authorization":`Bearer ${apiKeys.luma}`}
-              });
-              const pd = await pr.json();
-              if (pd?.state==="completed"&&pd?.assets?.video) { videoUrl=pd.assets.video; break; }
-              if (pd?.state==="failed") break;
-            }
+        const res = await fetch("https://api.lumalabs.ai/dream-machine/v1/generations", {
+          method:"POST",
+          headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKeys.luma}`},
+          body: JSON.stringify({ prompt:scenePrompt, aspect_ratio:"16:9", loop:false }),
+        });
+        const d = await res.json();
+        if (d?.id) {
+          log("⏳ Luma rendering video... (1-3 min)", C.neon2);
+          for (let i=0;i<40;i++) {
+            await sleep(5000);
+            const pr = await fetch(`https://api.lumalabs.ai/dream-machine/v1/generations/${d.id}`,{
+              headers:{"Authorization":`Bearer ${apiKeys.luma}`}
+            });
+            const pd = await pr.json();
+            if (pd?.state==="completed"&&pd?.assets?.video) { videoUrl=pd.assets.video; break; }
+            if (pd?.state==="failed") break;
           }
         }
         if (videoUrl) {
@@ -309,7 +295,7 @@ function AutoModePanel({ apiKeys }) {
     { key:"script", icon:"✍", label:"Script & Lyrics", color:C.neon1 },
     { key:"music",  icon:"🎵", label:"Music (Suno)", color:C.neon3 },
     { key:"voice",  icon:"🎙", label:"Voice (ElevenLabs)", color:C.neon4 },
-    { key:"video",  icon:"🎬", label:"Video ("+( videoEngine==="runway"?"Runway":"Luma")+")", color:C.neon2 },
+    { key:"video",  icon:"🎬", label:"Video (Luma AI)", color:C.neon2 },
   ];
 
   return (
@@ -352,12 +338,6 @@ function AutoModePanel({ apiKeys }) {
           <Field label="Voice"><Sel value={voiceId} onChange={e=>setVoiceId(e.target.value)} disabled={running}>
             {VOICES.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
           </Sel></Field>
-          <Field label="Video Engine">
-            <Sel value={videoEngine} onChange={e=>setVideoEngine(e.target.value)} disabled={running}>
-              <option value="runway">Runway ML</option>
-              <option value="luma">Luma AI</option>
-            </Sel>
-          </Field>
         </div>
 
         <BtnPrimary onClick={runPipeline} disabled={running||!brief.trim()} style={{ width:"100%", padding:"15px", fontSize:15 }}>
@@ -474,7 +454,7 @@ function ScriptPanel({ onReady }) {
     if(checks.scenes) want.push("numbered cinematic scene prompts optimized for AI video generation");
     try {
       const res=await fetch("https://api.anthropic.com/v1/messages",{
-        method:"POST",headers:{"Content-Type":"application/json"},
+        method:"POST",headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
         body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,
           messages:[{role:"user",content:`You are Videx AI — a bold, professional creative studio AI.\n\nCreate ${want.join(", ")} for a ${dur} ${genre} ${mood} ${lang} production about: "${topic}"\n\nUse headers: ## 🎬 VIDEO SCRIPT, ## 🎵 SONG LYRICS, ## 📽 SCENE PROMPTS\nMake it production-ready, vivid, and commercially powerful.`}]}),
       });
@@ -593,8 +573,7 @@ function VoicePanel({ apiKeys, script }) {
 }
 
 function VideoPanel({ apiKeys, script }) {
-  const [engine,setEngine]=useState("runway"); const [prompt,setPrompt]=useState("");
-  const [duration,setDuration]=useState(5); const [ratio,setRatio]=useState("1280:720");
+  const [prompt,setPrompt]=useState("");
   const [status,setStatus]=useState("idle"); const [videoUrl,setVideoUrl]=useState("");
   const [err,setErr]=useState(""); const [elapsed,setElapsed]=useState(0);
   const timer=useRef(null);
@@ -605,17 +584,7 @@ function VideoPanel({ apiKeys, script }) {
     return()=>clearInterval(timer.current);
   },[status]);
   const fmt=s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
-  const pollRunway=async(id)=>{
-    for(let i=0;i<40;i++){
-      await new Promise(r=>setTimeout(r,5000));
-      try{ const res=await fetch(`https://api.dev.runwayml.com/v1/tasks/${id}`,{headers:{"Authorization":`Bearer ${apiKeys.runway}`,"X-Runway-Version":"2024-11-06"}});
-        const d=await res.json();
-        if(d?.status==="SUCCEEDED"&&d?.output?.[0]){setVideoUrl(d.output[0]);setStatus("done");return;}
-        if(d?.status==="FAILED"){setErr("Runway failed.");setStatus("error");return;}
-      }catch{}
-    }
-    setErr("Timed out.");setStatus("error");
-  };
+
   const pollLuma=async(id)=>{
     for(let i=0;i<40;i++){
       await new Promise(r=>setTimeout(r,5000));
@@ -627,41 +596,29 @@ function VideoPanel({ apiKeys, script }) {
     }
     setErr("Timed out.");setStatus("error");
   };
+
   const go=async()=>{
-    const key=engine==="runway"?apiKeys.runway:apiKeys.luma;
-    if(!key){setErr(`Add your ${engine==="runway"?"Runway ML":"Luma AI"} key in ⚙ Settings.`);return;}
+    if(!apiKeys.luma){setErr("Add your Luma AI key in ⚙ Settings.");return;}
     setStatus("loading");setErr("");setVideoUrl("");
     try{
-      if(engine==="runway"){
-        const res=await fetch("https://api.dev.runwayml.com/v1/image_to_video",{
-          method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKeys.runway}`,"X-Runway-Version":"2024-11-06"},
-          body:JSON.stringify({promptText:prompt,model:"gen4_turbo",ratio,duration}),
-        });
-        const d=await res.json();
-        if(d?.id)pollRunway(d.id); else{setErr(d?.message||"Runway failed.");setStatus("error");}
-      } else {
-        const res=await fetch("https://api.lumalabs.ai/dream-machine/v1/generations",{
-          method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKeys.luma}`},
-          body:JSON.stringify({prompt,aspect_ratio:"16:9",loop:false}),
-        });
-        const d=await res.json();
-        if(d?.id)pollLuma(d.id); else{setErr(d?.detail||"Luma failed.");setStatus("error");}
-      }
+      const res=await fetch("https://api.lumalabs.ai/dream-machine/v1/generations",{
+        method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKeys.luma}`},
+        body:JSON.stringify({prompt,aspect_ratio:"16:9",loop:false}),
+      });
+      const d=await res.json();
+      if(d?.id)pollLuma(d.id); else{setErr(d?.detail||"Luma failed.");setStatus("error");}
     }catch{setErr("Request failed.");setStatus("error");}
   };
+
   return <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
     <div>
-      <div style={{display:"flex",gap:10,marginBottom:18}}>
-        <BtnGhost onClick={()=>setEngine("runway")} active={engine==="runway"} color={C.neon2}>🎬 Runway ML</BtnGhost>
-        <BtnGhost onClick={()=>setEngine("luma")} active={engine==="luma"} color={C.neon3}>✨ Luma AI</BtnGhost>
+      <div style={{marginBottom:16,padding:"12px 16px",background:`${C.neon2}0a`,border:`1px solid ${C.neon2}30`,borderRadius:10}}>
+        <span style={{fontSize:10,fontWeight:800,color:C.neon2,letterSpacing:2,fontFamily:"'Syne',sans-serif"}}>LUMA AI</span>
+        <p style={{fontSize:12,color:C.muted,marginTop:6,fontFamily:"'Syne',sans-serif",lineHeight:1.6}}>Fast, cinematic AI video — great for music videos, b-roll & product shots.</p>
       </div>
       <Field label="Scene Description"><FocusTxta rows={5} value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="Cinematic scene: setting, lighting, camera movement, characters, mood..." /></Field>
-      {engine==="runway"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
-        <Field label="Duration"><Sel value={duration} onChange={e=>setDuration(Number(e.target.value))}><option value={5}>5 seconds</option><option value={10}>10 seconds</option></Sel></Field>
-        <Field label="Aspect Ratio"><Sel value={ratio} onChange={e=>setRatio(e.target.value)}><option value="1280:720">16:9 Landscape</option><option value="720:1280">9:16 Portrait</option><option value="1024:1024">1:1 Square</option></Sel></Field>
-      </div>}
       <div style={{background:`${C.neon2}0a`,border:`1px solid ${C.neon2}25`,borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.muted,fontFamily:"'Syne',sans-serif",lineHeight:1.6}}>
-        ⏱ Video takes <strong style={{color:C.neon2}}>2–5 minutes</strong>. Keep this tab open.
+        ⏱ Video takes <strong style={{color:C.neon2}}>1–3 minutes</strong>. Keep this tab open.
       </div>
       <div style={{display:"flex",alignItems:"center",gap:14}}>
         <BtnPrimary onClick={go} disabled={status==="loading"} color={C.neon2}>{status==="loading"&&<Spinner color={C.neon2} />}{status==="loading"?`Rendering… ${fmt(elapsed)}`:"🎬 Generate Video"}</BtnPrimary>
@@ -669,14 +626,14 @@ function VideoPanel({ apiKeys, script }) {
       </div>
       {err&&<div style={{color:C.error,fontSize:12,marginTop:10,fontFamily:"'Syne',sans-serif"}}>{err}</div>}
     </div>
-    <div>{videoUrl?<Card title="Generated Scene" color={C.neon2}><video controls src={videoUrl} style={{width:"100%",borderRadius:10,marginBottom:14}} /><a href={videoUrl} download="videx-scene.mp4" style={{textDecoration:"none"}}><BtnGhost color={C.neon2}>⬇ Download MP4</BtnGhost></a></Card>:<EmptyState icon="🎬" title="Video renders here" sub="Cinematic quality, scene by scene" />}</div>
+    <div>{videoUrl?<Card title="Generated Scene" color={C.neon2}><video controls src={videoUrl} style={{width:"100%",borderRadius:10,marginBottom:14}} /><a href={videoUrl} download="videx-scene.mp4" style={{textDecoration:"none"}}><BtnGhost color={C.neon2}>⬇ Download MP4</BtnGhost></a></Card>:<EmptyState icon="🎬" title="Video renders here" sub="Fast, cinematic quality with Luma AI" />}</div>
   </div>;
 }
 
 /* ─── SETTINGS ───────────────────────────────────────────────── */
 function Settings({ keys, setKeys, onClose }) {
   const [local,setLocal]=useState({...keys}); const [show,setShow]=useState({});
-  const fields=[{k:"suno",label:"Suno AI",color:C.neon3},{k:"elevenlabs",label:"ElevenLabs",color:C.neon4},{k:"runway",label:"Runway ML",color:C.neon2},{k:"luma",label:"Luma AI",color:C.neon1}];
+  const fields=[{k:"suno",label:"Suno AI",color:C.neon3},{k:"elevenlabs",label:"ElevenLabs",color:C.neon4},{k:"luma",label:"Luma AI",color:C.neon1}];
   return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,backdropFilter:"blur(10px)"}}>
     <div style={{background:C.surface,border:`1px solid ${C.neon1}40`,borderRadius:18,padding:32,width:"min(460px,92vw)",boxShadow:`0 0 60px ${C.neon1}20`}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
@@ -709,7 +666,7 @@ const ALL_TABS = [
 
 export default function App() {
   const [tab,setTab]=useState("auto");
-  const [keys,setKeys]=useState({suno:"",elevenlabs:"",runway:"",luma:""});
+  const [keys,setKeys]=useState({suno:"",elevenlabs:"",luma:""});
   const [showSettings,setShowSettings]=useState(false);
   const [script,setScript]=useState("");
   const keysSet=Object.values(keys).some(v=>v.length>0);
