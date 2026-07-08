@@ -192,6 +192,19 @@ function EmptyState({ icon, title, sub }) {
   </div>;
 }
 
+function NoKeyBanner({ onOpen }) {
+  return <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:14,background:`${C.neon1}0d`,border:`1px solid ${C.neon1}50`,borderRadius:10,padding:"12px 18px",marginBottom:20 }}>
+    <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+      <span style={{ fontSize:18 }}>🔑</span>
+      <div>
+        <div style={{ fontSize:12,fontWeight:800,color:C.neon1,fontFamily:"'Syne',sans-serif" }}>Anthropic API key required</div>
+        <div style={{ fontSize:11,color:C.muted,fontFamily:"'Syne',sans-serif",marginTop:2 }}>Add your key once — it's saved in your browser.</div>
+      </div>
+    </div>
+    <BtnPrimary onClick={onOpen} style={{ padding:"8px 18px",fontSize:12,whiteSpace:"nowrap" }}>⚙ Add Key</BtnPrimary>
+  </div>;
+}
+
 /* ─── TEMPLATES MODAL ────────────────────────────────────────── */
 function TemplatesModal({ onSelect, onClose }) {
   return <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,backdropFilter:"blur(12px)" }}>
@@ -225,7 +238,7 @@ function TemplatesModal({ onSelect, onClose }) {
 }
 
 /* ─── AUTO MODE ──────────────────────────────────────────────── */
-function AutoModePanel({ apiKeys, initialBrief, onHistoryEntry }) {
+function AutoModePanel({ apiKeys, initialBrief, onHistoryEntry, onOpenSettings }) {
   const [brief,setBrief]=useState(initialBrief||""); const [genre,setGenre]=useState("Afrobeats");
   const [mood,setMood]=useState("Energetic"); const [lang,setLang]=useState("English");
   const [dur,setDur]=useState("3-5 min"); const [voiceId,setVoiceId]=useState("21m00Tcm4TlvDq8ikWAM");
@@ -249,7 +262,7 @@ function AutoModePanel({ apiKeys, initialBrief, onHistoryEntry }) {
     log("⚡ Pipeline started...",C.neon1);
 
     // SCRIPT
-    if(!apiKeys.claude){setStage("script","error");log("❌ Add Claude API key in Settings.",C.error);setRunning(false);return;}
+    if(!apiKeys.claude){setRunning(false);onOpenSettings();return;}
     log("✍  Streaming script...",C.neon2); setStage("script","loading");
     let scriptText="";
     try {
@@ -325,6 +338,7 @@ function AutoModePanel({ apiKeys, initialBrief, onHistoryEntry }) {
 
   return <>
     {showTpl&&<TemplatesModal onSelect={t=>{setBrief(t.brief);setGenre(t.genre);setMood(t.mood);setLang(t.lang);}} onClose={()=>setShowTpl(false)} />}
+    {!apiKeys.claude&&<NoKeyBanner onOpen={onOpenSettings} />}
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
       <div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
@@ -405,7 +419,7 @@ function AutoModePanel({ apiKeys, initialBrief, onHistoryEntry }) {
 }
 
 /* ─── SCRIPT PANEL ───────────────────────────────────────────── */
-function ScriptPanel({ onReady, apiKeys }) {
+function ScriptPanel({ onReady, apiKeys, onOpenSettings }) {
   const [topic,setTopic]=useState(""); const [genre,setGenre]=useState("Afrobeats");
   const [mood,setMood]=useState("Energetic"); const [lang,setLang]=useState("English"); const [dur,setDur]=useState("3-5 min");
   const [checks,setChecks]=useState({script:true,lyrics:true,scenes:true});
@@ -415,7 +429,7 @@ function ScriptPanel({ onReady, apiKeys }) {
 
   const go=async()=>{
     if(!topic.trim())return;
-    if(!apiKeys.claude){setErr("Add your Claude API key in ⚙ Settings.");return;}
+    if(!apiKeys.claude){onOpenSettings();return;}
     abortRef.current=new AbortController();
     setStatus("loading");setErr("");setOut("");
     const want=[];
@@ -431,6 +445,7 @@ function ScriptPanel({ onReady, apiKeys }) {
 
   return <>
     {showTpl&&<TemplatesModal onSelect={t=>{setTopic(t.brief);setGenre(t.genre);setMood(t.mood);setLang(t.lang);}} onClose={()=>setShowTpl(false)} />}
+    {!apiKeys.claude&&<NoKeyBanner onOpen={onOpenSettings} />}
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
       <div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -890,8 +905,8 @@ function App() {
 
       <main style={{padding:"24px 20px 60px",position:"relative",zIndex:1}}>
         <div style={{animation:"fadeUp 0.3s ease"}}>
-          {tab==="auto"    && <AutoModePanel apiKeys={keys} initialBrief={loadedBrief} onHistoryEntry={pushHistory} />}
-          {tab==="script"  && <ScriptPanel onReady={setScript} apiKeys={keys} />}
+          {tab==="auto"    && <AutoModePanel apiKeys={keys} initialBrief={loadedBrief} onHistoryEntry={pushHistory} onOpenSettings={()=>setShowSettings(true)} />}
+          {tab==="script"  && <ScriptPanel onReady={setScript} apiKeys={keys} onOpenSettings={()=>setShowSettings(true)} />}
           {tab==="music"   && <MusicPanel apiKeys={keys} script={script} />}
           {tab==="voice"   && <VoicePanel apiKeys={keys} script={script} />}
           {tab==="video"   && <VideoPanel apiKeys={keys} script={script} />}
