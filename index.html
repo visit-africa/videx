@@ -59,7 +59,7 @@ const IMG_RATIOS = [
   { label:"4:3",   val:"4:3" },
 ];
 
-const EMPTY_KEYS = { suno:"", elevenlabs:"", runway:"", luma:"", replicate:"" };
+const EMPTY_KEYS = { elevenlabs:"", runway:"", luma:"", replicate:"" };
 
 /* ─── PERSISTENCE ────────────────────────────────────────────── */
 const loadKeys = () => {
@@ -264,17 +264,18 @@ function AutoModePanel({ apiKeys, initialBrief, onHistoryEntry, onOpenSettings }
     } catch(e){setStage("script","error");log(`❌ Script: ${e.message}`,C.error);setRunning(false);return;}
 
     // MUSIC
-    if(!apiKeys.suno){setStage("music","skipped");log("⏭  Music skipped — no Suno key.",C.muted);}
+    if(!apiKeys.replicate){setStage("music","skipped");log("⏭  Music skipped — no Replicate key.",C.muted);}
     else {
-      log("🎵 Composing with Suno...",C.neon3); setStage("music","loading");
+      log("🎵 Composing with MusicGen...",C.neon3); setStage("music","loading");
       try {
-        const res=await fetch("https://api.sunoaiapi.com/api/v1/gateway/generate/music",{method:"POST",headers:{"Content-Type":"application/json","api-key":apiKeys.suno},body:JSON.stringify({gpt_description_prompt:scriptText.substring(0,300)+` Style: ${genre}, ${mood}`,make_instrumental:false,mv:"chirp-v3-5"})});
-        const data=await res.json(); const songId=data?.data?.[0]?.song_id;
-        if(songId){
-          log("⏳ Waiting for Suno...",C.neon3); let done=false;
-          for(let i=0;i<30;i++){await sleep(5000);const pr=await fetch(`https://api.sunoaiapi.com/api/v1/gateway/feed/${songId}`,{headers:{"api-key":apiKeys.suno}});const pd=await pr.json();const s=pd?.data?.[0];if(s?.status==="complete"&&s?.audio_url){setResults(p=>({...p,music:s}));setStage("music","done");log("✅ Music ready.",C.success);done=true;break;}if(s?.status==="error")break;}
+        const musicPrompt=`${scriptText.substring(0,200)} Style: ${genre}, ${mood}, instrumental, high quality production`;
+        const res=await fetch("https://api.replicate.com/v1/models/meta/musicgen/predictions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Token ${apiKeys.replicate}`},body:JSON.stringify({input:{prompt:musicPrompt,duration:15,model_version:"stereo-large",output_format:"mp3"}})});
+        const data=await res.json();
+        if(data.id){
+          log("⏳ Waiting for MusicGen...",C.neon3); let done=false;
+          for(let i=0;i<40;i++){await sleep(3000);const pr=await fetch(data.urls.get,{headers:{"Authorization":`Token ${apiKeys.replicate}`}});const pd=await pr.json();if(pd.status==="succeeded"&&pd.output){setResults(p=>({...p,music:pd.output}));setStage("music","done");log("✅ Music ready.",C.success);done=true;break;}if(pd.status==="failed")break;}
           if(!done){setStage("music","error");log("❌ Music timed out.",C.error);}
-        } else{setStage("music","error");log("❌ Suno failed.",C.error);}
+        } else{setStage("music","error");log(`❌ MusicGen: ${data.detail||"failed"}`,C.error);}
       } catch{setStage("music","error");log("❌ Music error.",C.error);}
     }
 
@@ -321,12 +322,12 @@ function AutoModePanel({ apiKeys, initialBrief, onHistoryEntry, onOpenSettings }
     setRunning(false);
     // save to history
     setResults(p=>{
-      onHistoryEntry({brief,genre,mood,lang,dur,script:scriptText,musicUrl:p.music?.audio_url||"",videoUrl:p.videos?.[0]?.url||""});
+      onHistoryEntry({brief,genre,mood,lang,dur,script:scriptText,musicUrl:p.music||"",videoUrl:p.videos?.[0]?.url||""});
       return p;
     });
   };
 
-  const stageList=[{key:"script",icon:"✍",label:"Script & Lyrics",color:C.neon1},{key:"music",icon:"🎵",label:"Music (Suno)",color:C.neon3},{key:"voice",icon:"🎙",label:"Voice (ElevenLabs)",color:C.neon4},{key:"video",icon:"🎬",label:`Video (${videoEngine==="runway"?"Runway":"Luma"})`,color:C.neon2}];
+  const stageList=[{key:"script",icon:"✍",label:"Script & Lyrics",color:C.neon1},{key:"music",icon:"🎵",label:"Music (MusicGen)",color:C.neon3},{key:"voice",icon:"🎙",label:"Voice (ElevenLabs)",color:C.neon4},{key:"video",icon:"🎬",label:`Video (${videoEngine==="runway"?"Runway":"Luma"})`,color:C.neon2}];
 
   return <>
     {showTpl&&<TemplatesModal onSelect={t=>{setBrief(t.brief);setGenre(t.genre);setMood(t.mood);setLang(t.lang);}} onClose={()=>setShowTpl(false)} />}
@@ -386,8 +387,8 @@ function AutoModePanel({ apiKeys, initialBrief, onHistoryEntry, onOpenSettings }
           <pre style={{color:C.text,fontSize:11,lineHeight:1.8,whiteSpace:"pre-wrap",fontFamily:"'Syne',sans-serif",margin:0,maxHeight:200,overflowY:"auto"}}>{results.script}</pre>
         </Card>}
         {results.music&&<Card title="Music Track" color={C.neon3}>
-          <audio controls src={results.music.audio_url} style={{width:"100%",marginBottom:10,borderRadius:8}} />
-          <a href={results.music.audio_url} download style={{textDecoration:"none"}}><BtnGhost color={C.neon3}>⬇ Download MP3</BtnGhost></a>
+          <audio controls src={results.music} style={{width:"100%",marginBottom:10,borderRadius:8}} />
+          <a href={results.music} download="videx-music.mp3" target="_blank" rel="noopener" style={{textDecoration:"none"}}><BtnGhost color={C.neon3}>⬇ Download MP3</BtnGhost></a>
         </Card>}
         {results.voice&&<Card title="Voiceover" color={C.neon4}>
           <audio controls src={results.voice} style={{width:"100%",marginBottom:10,borderRadius:8}} />
@@ -476,27 +477,42 @@ function MusicPanel({ apiKeys, script }) {
   const [status,setStatus]=useState("idle"); const [result,setResult]=useState(null); const [err,setErr]=useState("");
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   useEffect(()=>{ if(script)setPrompt(script.substring(0,300)); },[script]);
-  const poll=async(id)=>{ for(let i=0;i<30;i++){await sleep(5000);try{const res=await fetch(`https://api.sunoaiapi.com/api/v1/gateway/feed/${id}`,{headers:{"api-key":apiKeys.suno}});const data=await res.json();const s=data?.data?.[0];if(s?.status==="complete"&&s?.audio_url){setResult(s);setStatus("done");return;}if(s?.status==="error"){setErr("Suno failed.");setStatus("error");return;}}catch{}}setErr("Timed out.");setStatus("error"); };
   const go=async()=>{
-    if(!apiKeys.suno){setErr("Add your Suno AI key in ⚙ Settings.");return;}
+    if(!apiKeys.replicate){setErr("Add your Replicate key in ⚙ Settings — free tier at replicate.com");return;}
     setStatus("loading");setErr("");setResult(null);
-    try{const res=await fetch("https://api.sunoaiapi.com/api/v1/gateway/generate/music",{method:"POST",headers:{"Content-Type":"application/json","api-key":apiKeys.suno},body:JSON.stringify({gpt_description_prompt:prompt+(tags?` Style: ${tags}`:""),make_instrumental:false,mv:"chirp-v3-5"})});const data=await res.json();const id=data?.data?.[0]?.song_id;if(id)poll(id);else{setErr(data?.message||"Suno failed.");setStatus("error");}}catch{setErr("Request failed.");setStatus("error");}
+    const musicPrompt=prompt+(tags?`. Style: ${tags}`:".")+". Instrumental, high quality, professional production.";
+    try{
+      const res=await fetch("https://api.replicate.com/v1/models/meta/musicgen/predictions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Token ${apiKeys.replicate}`},body:JSON.stringify({input:{prompt:musicPrompt,duration:15,model_version:"stereo-large",output_format:"mp3"}})});
+      const data=await res.json();
+      if(!data.id){setErr(data.detail||"Replicate failed.");setStatus("error");return;}
+      for(let i=0;i<40;i++){
+        await sleep(3000);
+        const pr=await fetch(data.urls.get,{headers:{"Authorization":`Token ${apiKeys.replicate}`}});
+        const pd=await pr.json();
+        if(pd.status==="succeeded"&&pd.output){setResult(pd.output);setStatus("done");return;}
+        if(pd.status==="failed"){setErr(pd.error||"Generation failed.");setStatus("error");return;}
+      }
+      setErr("Timed out.");setStatus("error");
+    }catch{setErr("Request failed.");setStatus("error");}
   };
   return <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
     <div>
-      <div style={{marginBottom:16,padding:"12px 16px",background:`${C.neon3}0a`,border:`1px solid ${C.neon3}30`,borderRadius:10}}>
-        <span style={{fontSize:10,fontWeight:800,color:C.neon3,letterSpacing:2,fontFamily:"'Syne',sans-serif"}}>SUNO AI</span>
-        <p style={{fontSize:12,color:C.muted,marginTop:6,fontFamily:"'Syne',sans-serif",lineHeight:1.6}}>Full songs with real vocals & instruments from your prompt.</p>
+      <div style={{marginBottom:16,padding:"12px 16px",background:`${C.neon3}0a`,border:`1px solid ${C.neon3}30`,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <span style={{fontSize:10,fontWeight:800,color:C.neon3,letterSpacing:2,fontFamily:"'Syne',sans-serif"}}>MUSICGEN · REPLICATE</span>
+          <p style={{fontSize:12,color:C.muted,marginTop:6,fontFamily:"'Syne',sans-serif",lineHeight:1.6}}>Meta's MusicGen — instrumental tracks from a text prompt. Uses your Replicate key.</p>
+        </div>
+        <span style={{fontSize:10,background:`${C.neon5}20`,color:C.neon5,padding:"3px 8px",borderRadius:20,fontWeight:800,letterSpacing:1,fontFamily:"'Syne',sans-serif",whiteSpace:"nowrap",marginLeft:12}}>FREE TIER</span>
       </div>
-      <Field label="Music Prompt"><FocusTxta rows={5} value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="Describe the feel: mood, story, energy, instruments, vocal style..." /></Field>
-      <Field label="Style Tags (optional)"><FocusInp value={tags} onChange={e=>setTags(e.target.value)} placeholder="e.g. afrobeats, female vocal, 120bpm, uplifting" /></Field>
+      <Field label="Music Prompt"><FocusTxta rows={5} value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="Describe the feel: mood, energy, instruments, genre..." /></Field>
+      <Field label="Style Tags (optional)"><FocusInp value={tags} onChange={e=>setTags(e.target.value)} placeholder="e.g. afrobeats, 120bpm, uplifting, live drums" /></Field>
       <div style={{display:"flex",alignItems:"center",gap:14}}>
-        <BtnPrimary onClick={go} disabled={status==="loading"} color={C.neon3}>{status==="loading"&&<Spinner color={C.neon3} />}{status==="loading"?"Composing...":"🎵 Generate Music"}</BtnPrimary>
+        <BtnPrimary onClick={go} disabled={status==="loading"} color={C.neon3}>{status==="loading"&&<Spinner color={C.neon3} />}{status==="loading"?"Composing (~30s)...":"🎵 Generate Music"}</BtnPrimary>
         <StatusPill status={status} />
       </div>
       {err&&<div style={{color:C.error,fontSize:12,marginTop:10,fontFamily:"'Syne',sans-serif"}}>{err}</div>}
     </div>
-    <div>{result?<Card title="Your Track" color={C.neon3}><div style={{fontSize:14,fontWeight:800,color:C.text,marginBottom:14,fontFamily:"'Syne',sans-serif"}}>{result.title||"Untitled Track"}</div><audio controls src={result.audio_url} style={{width:"100%",marginBottom:14,borderRadius:8}} /><a href={result.audio_url} download style={{textDecoration:"none"}}><BtnGhost color={C.neon3}>⬇ Download MP3</BtnGhost></a></Card>:<EmptyState icon="🎵" title="Music plays here" sub="Takes ~30-60s after generating" />}</div>
+    <div>{result?<Card title="Your Track" color={C.neon3}><audio controls src={result} style={{width:"100%",marginBottom:14,borderRadius:8}} /><a href={result} download="videx-music.mp3" target="_blank" rel="noopener" style={{textDecoration:"none"}}><BtnGhost color={C.neon3}>⬇ Download MP3</BtnGhost></a></Card>:<EmptyState icon="🎵" title="Music plays here" sub="Takes ~30s — instrumental track" />}</div>
   </div>;
 }
 
@@ -759,11 +775,10 @@ function Settings({ keys, setKeys, onClose }) {
   const [local,setLocal]=useState({...keys});
   const [showMore,setShowMore]=useState(false);
   const otherFields=[
-    {k:"suno",      label:"Suno AI",      color:C.neon3, hint:"Music generation"},
+    {k:"replicate", label:"Replicate",    color:C.neon5, hint:"Music (MusicGen) + Image generation — free tier available"},
     {k:"elevenlabs",label:"ElevenLabs",   color:C.neon4, hint:"Voice synthesis"},
     {k:"runway",    label:"Runway ML",    color:C.neon2, hint:"Video generation"},
     {k:"luma",      label:"Luma AI",      color:C.neon2, hint:"Video (alternative)"},
-    {k:"replicate", label:"Replicate",    color:C.neon5, hint:"Image generation"},
   ];
   return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,backdropFilter:"blur(12px)"}}>
     <div style={{background:C.surface,border:`1px solid ${C.neon1}40`,borderRadius:20,padding:32,width:"min(480px,94vw)",boxShadow:`0 0 80px ${C.neon1}18`}}>
